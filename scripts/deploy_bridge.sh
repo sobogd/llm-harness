@@ -42,7 +42,9 @@ new_h=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$NEW/health")
 old_s=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BRIDGE_TOKEN" "http://127.0.0.1:$OLD/status")
 new_s=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BRIDGE_TOKEN" "http://127.0.0.1:$NEW/status")
 echo "equivalence: health old=$old_h new=$new_h; status old=$old_s new=$new_s"
-if [ "$old_h" != "200" ] || [ "$old_h" != "$new_h" ] || [ "$old_s" != "$new_s" ]; then
+# old /status is logged, not gated: it holds the previous token, so a
+# token rotation legitimately shows 401 there.
+if [ "$old_h" != "200" ] || [ "$new_h" != "200" ] || [ "$new_s" != "200" ]; then
   echo "equivalence FAILED; keeping old $OLD"
   canary_cleanup
   exit 1
