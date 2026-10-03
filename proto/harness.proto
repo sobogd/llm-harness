@@ -1,0 +1,190 @@
+syntax = "proto3";
+
+package harness.v1;
+
+// gRPC control contract for the harness process.
+// Streaming events (text, thinking, tools, compaction, usage) go over SSE
+// (:9001/events); here — commands and synchronous replies only.
+
+service Harness {
+  // Accept a user message and start/continue an agent run.
+  // If a run is already active the message is queued (steering) and executes
+  // after the current assistant turn. The reply is immediate: run id,
+  // progress arrives over SSE.
+  rpc Ask(AskRequest) returns (AskReply);
+
+  // Stop the current run: the LLM stream is torn down, pending tool calls are
+  // not executed (an already-started bash command runs to its timeout).
+  // History is preserved; Resume can continue the loop.
+  rpc Stop(Empty) returns (RunStatus);
+
+  // Resume a stopped run: continue the loop with the current history.
+  rpc Resume(Empty) returns (RunStatus);
+
+  // Change settings on the fly (fields left at 0/"" are unchanged).
+  // Takes effect from the next LLM request.
+  rpc SetSettings(Settings) returns (Settings);
+
+  // Manual compaction of the history (see CompactRequest).
+  // Executes between turns (waits for the current turn if a run is active).
+  rpc Compact(CompactRequest) returns (CompactReply);
+
+  // Current state: settings, run, token counts, queue depth.
+  rpc Status(Empty) returns (StatusReply);
+
+  // Conversation history (in RAM) for the UI. last=0 returns the full
+  // history; last>0 returns the trailing N messages. Read-only snapshot;
+  // live changes still arrive over SSE.
+  rpc GetMessages(GetMessagesRequest) returns (GetMessagesReply);
+
+  // Discard the conversation and start a fresh session (system prompt only).
+  // The previous session (if it has messages) is archived first, so it shows
+  // up in ListSessions. Allowed only when no run is active or paused.
+  rpc NewSession(Empty) returns (AskReply);
+
+  // All sessions: the currently loaded one plus the archived ones
+  // (<root>/.llm-harness/sessions/<id>.jsonl). Sorted by last update, newest
+  // first.
+  rpc ListSessions(Empty) returns (ListSessionsReply);
+
+  // Load an archived session as the current one (its content is copied back
+  // to the active session file and replayed into RAM). The current session is
+  // archived first (if it has messages). Allowed only when no run is active
+  // or paused.
+  rpc LoadSession(LoadSessionRequest) returns (AskReply);
+
+  // Delete a session. For an archived session the file is removed. For the
+  // currently loaded one its history is discarded and a fresh session starts
+  // (same precondition as NewSession).
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionReply);
+}
+
+message Empty {}
+
+message AskRequest {
+  string prompt = 1;                 // task text (required)
+  string system_note = 2;            // optional extra instruction, prepended to prompt
+  string session_id = 3;             // empty = current/new session
+}
+
+message AskReply {
+  string run_id = 1;                // id of this run (correlates with SSE)
+  string session_id = 2;
+  string state = 3;                 // running | queued
+}
+
+enum RunState {
+  RUN_STATE_IDLE = 0;
+  RUN_STATE_RUNNING = 1;
+  RUN_STATE_STOPPED = 2;            // stopped by user, can Resume
+  RUN_STATE_DONE = 3;               // finished on its own (model answered without tools)
+  RUN_STATE_ERROR = 4;
+}
+
+message RunStatus {
+  string run_id = 1;
+  RunState state = 2;
+  int32 turn = 3;                   // current turn number within the run
+  string last_error = 4;
+}
+
+// Model/run settings. Zero/empty values mean "do not change".
+message Settings {
+  int32 max_context_tokens = 1;     // context boundary; auto-compaction fires
+                                    // when usage.prompt_tokens + max_output_tokens
+                                    // reaches it. Server window is 204800;
+                                    // default: 60000 (pi's choice)
+  int32 max_output_tokens = 2;      // max_tokens in the request; the server has no
+                                    // hard output cap (pi uses 34000). Default: 8192
+  bool thinking_enabled = 3;        // maps to enable_thinking
+  string thinking_effort = 4;       // "" | minimal | low | medium | xhigh
+                                    // mtplx accepts exactly low/medium/xhigh
+                                    // (mapping — see docs/MTPLX.md)
+  int32 sampling_temperature_x100 = 5; // 100 = 1.0; 0 = unchanged (server default 1.0)
+  int32 sampling_top_p_x100 = 6;      // 95 = 0.95; 0 = unchanged (server default 0.95)
+  int32 sampling_top_k = 7;           // 0 = unchanged (server default 20)
+}
+
+message CompactRequest {
+  // keep_last_messages: how many trailing messages (including their tool
+  // results) to keep untouched. 0 = use the default (10).
+  // Manual (via this RPC) differs from auto (token-boundary trigger);
+  // the client sees the reason in SSE compact_started.reason.
+  int32 keep_last_messages = 1;
+}
+
+message CompactReply {
+  bool ok = 1;
+  int32 tokens_before = 2;          // estimate before compaction
+  int32 tokens_after = 3;           // estimate right after
+  int32 messages_before = 4;
+  int32 messages_after = 5;
+  string summary_preview = 6;       // first ~200 chars of the summary
+}
+
+message GetMessagesRequest {
+  int32 last = 1;                 // 0 = all messages
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments = 3;           // raw JSON string, as sent to the model
+}
+
+message Message {
+  string role = 1;                // system | user | assistant | tool
+  string content = 2;
+  repeated ToolCall tool_calls = 3; // assistant: requested tools
+  string tool_call_id = 4;        // tool: which call this result answers
+  string name = 5;                // tool: tool name, denormalized for the UI
+  string reasoning_content = 6;   // assistant: thinking (may be empty)
+}
+
+message GetMessagesReply {
+  repeated Message m = 1;
+  string model = 2;               // current settings.model
+}
+
+message StatusReply {
+  Settings settings = 1;            // current effective settings
+  RunStatus run = 2;
+  string session_id = 3;
+  int32 history_messages = 4;
+  int32 prompt_tokens_last = 5;     // usage.prompt_tokens of the last request
+  int32 queue_depth = 6;            // queued Ask messages waiting
+  int64 started_at_unix_ms = 7;
+  bool history_loaded = 8;          // history was restored from the session JSONL
+  string loaded_from = 9;           // path of the session JSONL ("" = fresh session)
+  int32 persisted_messages = 10;    // messages in the current (restored/live) history
+  repeated string active_subagents = 11; // ids of running subagents (empty when none)
+}
+
+// ---------------------------------------------------------- session mgmt
+
+message SessionInfo {
+  string id = 1;                   // session uuid
+  string preview = 2;              // first user message, truncated ("" if none)
+  int32 messages = 3;              // message count (incl. system prompt)
+  int64 created_ms = 4;            // unix ms (0 = unknown)
+  int64 updated_ms = 5;            // unix ms of last activity
+  bool active = 6;                 // is this the current session?
+}
+
+message ListSessionsReply {
+  repeated SessionInfo sessions = 1; // newest activity first
+}
+
+message LoadSessionRequest {
+  string session_id = 1;
+}
+
+message DeleteSessionRequest {
+  string session_id = 1;
+}
+
+message DeleteSessionReply {
+  bool ok = 1;
+  string deleted = 2;              // id of the removed session
+  string session_id = 3;           // current session id after the operation
+}

@@ -1,0 +1,16 @@
+.venv/
+**/.venv/
+__pycache__/
+*.pyc
+.DS_Store
+logs/
+.llm-harness/
+app/build/
+app/.dart_tool/
+app/.flutter/
+app/.packages
+app/android/app/keystore.properties
+*.jks
+*.p12
+releases/*.apk
+secrets/defs.json
