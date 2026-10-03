@@ -53,10 +53,12 @@ jobs:
       - name: Sync code to VPS
         run: |
           ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          stage=$(mktemp -d)
+          cp -R bridge llm_harness proto requirements.txt "$stage"/
           rsync -az --delete --exclude .venv --exclude __pycache__ --exclude '*.pyc' \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
-            bridge/ llm_harness/ proto/ requirements.txt \
-            "${VPS_USER}@${VPS_HOST}:/opt/llm-bridge/"
+            "$stage"/ "${VPS_USER}@${VPS_HOST}:/opt/llm-bridge/"
+          rm -rf "$stage"
 
       - name: Run blue/green deploy on VPS
         env:
