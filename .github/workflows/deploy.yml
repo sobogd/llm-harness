@@ -1,0 +1,82 @@
+name: deploy-bridge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bridge/**'
+      - 'llm_harness/**'
+      - 'proto/**'
+      - 'requirements.txt'
+      - 'scripts/deploy_bridge.sh'
+  workflow_dispatch:
+    inputs:
+      smoke_ask:
+        description: Run a real /ask against the canary before switching
+        required: false
+        default: 'false'
+        type: string
+
+concurrency:
+  group: deploy-bridge
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+      VPS_USER: ${{ secrets.DEPLOY_SSH_USER }}
+    steps:
+      - name: "Preflight: required secrets"
+        env:
+          T: ${{ secrets.BRIDGE_TOKEN }}
+          K: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          H: ${{ secrets.DEPLOY_SSH_HOST }}
+        run: |
+          for v in T K H; do
+            if [ -z "${!v}" ]; then echo "::error::required secret ($v) is empty"; exit 1; fi
+          done
+          echo preflight ok
+
+      - uses: actions/checkout@v4
+
+      - name: Test SSH to VPS
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new "${VPS_USER}@${VPS_HOST}" 'echo SSH_OK'
+
+      - name: Sync code to VPS
+        run: |
+          ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          rsync -az --delete --exclude .venv --exclude __pycache__ --exclude '*.pyc' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
+            bridge/ llm_harness/ proto/ requirements.txt \
+            "${VPS_USER}@${VPS_HOST}:/opt/llm-bridge/"
+
+      - name: Run blue/green deploy on VPS
+        env:
+          BRIDGE_TOKEN: ${{ secrets.BRIDGE_TOKEN }}
+          SMOKE_ASK: ${{ inputs.smoke_ask == 'true' && '1' || '0' }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            scripts/deploy_bridge.sh "${VPS_USER}@${VPS_HOST}:/root/deploy_bridge.sh"
+          printf '%s\n%s\n' "$BRIDGE_TOKEN" "$SMOKE_ASK" | \
+            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new "${VPS_USER}@${VPS_HOST}" \
+            'read -r BRIDGE_TOKEN; read -r SMOKE_ASK; export BRIDGE_TOKEN SMOKE_ASK; bash /root/deploy_bridge.sh'
+
+      - name: Post-deploy verify from outside
+        env:
+          BRIDGE_TOKEN: ${{ secrets.BRIDGE_TOKEN }}
+        run: |
+          curl -fsS "http://${VPS_HOST}/health"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${BRIDGE_TOKEN}" "http://${VPS_HOST}/status")
+          if [ "$code" != "200" ] && [ "$code" != "502" ]; then
+            echo "unexpected /status code: $code"
+            exit 1
+          fi
+          echo "post-deploy verify ok (status=$code)"
