@@ -9,6 +9,7 @@ on:
       - 'proto/**'
       - 'requirements.txt'
       - 'scripts/deploy_bridge.sh'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
       smoke_ask:
