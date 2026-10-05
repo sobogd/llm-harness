@@ -45,7 +45,7 @@ jobs:
         with:
           channel: stable
 
-      - uses: actions/setup-android@v4
+      - uses: android-actions/setup-android@v4
 
       - name: pub get
         working-directory: app
