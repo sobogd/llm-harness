@@ -18,26 +18,21 @@ concurrency:
   group: build-apk
   cancel-in-progress: false
 
-env:
-  SERVER_URL_DEFAULT: https://llm.iq-factura.com
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      APP_VERSION: ${{ startsWith(github.ref, 'refs/tags/app-') && replace(github.ref_name, 'app-', '') || inputs.version }}
-      SERVER_URL: ${{ secrets.APP_SERVER_URL || 'https://llm.iq-factura.com' }}
-      UPDATE_BASE_URL: ${{ secrets.APP_UPDATE_BASE_URL || secrets.APP_SERVER_URL || 'https://llm.iq-factura.com' }}
     steps:
-      - name: "Preflight: version and required secrets"
+      - id: v
         env:
+          RAW: ${{ startsWith(github.ref, 'refs/tags/app-') && github.ref_name || inputs.version }}
           T: ${{ secrets.APP_AUTH_TOKEN }}
-          N: ${{ env.APP_VERSION }}
         run: |
-          if [ -z "$N" ] || ! printf '%s' "$N" | grep -Eq '^[0-9]+$'; then
+          N="${RAW#app-}"
+          if ! printf '%s' "$N" | grep -Eq '^[0-9]+$'; then
             echo "::error::release number N must be a positive integer (got: $N)"; exit 1
           fi
           if [ -z "$T" ]; then echo "::error::secret APP_AUTH_TOKEN is empty"; exit 1; fi
+          echo "N=$N" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
 
@@ -58,6 +53,9 @@ jobs:
 
       - name: build apk
         env:
+          APP_VERSION: ${{ steps.v.outputs.N }}
+          SERVER_URL: ${{ secrets.APP_SERVER_URL || 'https://llm.iq-factura.com' }}
+          UPDATE_BASE_URL: ${{ secrets.APP_UPDATE_BASE_URL || secrets.APP_SERVER_URL || 'https://llm.iq-factura.com' }}
           APP_AUTH_TOKEN: ${{ secrets.APP_AUTH_TOKEN }}
         working-directory: app
         run: |
@@ -69,9 +67,11 @@ jobs:
             --dart-define=APP_VERSION="$APP_VERSION"
 
       - name: rename artifact
+        env:
+          N: ${{ steps.v.outputs.N }}
         run: |
-          cp app/build/app/outputs/flutter-apk/app-release.apk "app-${APP_VERSION}.apk"
-          sha256sum "app-${APP_VERSION}.apk"
+          cp app/build/app/outputs/flutter-apk/app-release.apk "app-${N}.apk"
+          sha256sum "app-${N}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -80,17 +80,19 @@ jobs:
 
       - name: tag from dispatch
         if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          N: ${{ steps.v.outputs.N }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -f "app-${APP_VERSION}"
-          git push origin "app-${APP_VERSION}"
+          git tag -f "app-${N}"
+          git push origin "app-${N}"
 
       - name: release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "app-${{ env.APP_VERSION }}"
-          name: "app-${{ env.APP_VERSION }}"
+          tag_name: "app-${{ steps.v.outputs.N }}"
+          name: "app-${{ steps.v.outputs.N }}"
           files: |
-            app-${{ env.APP_VERSION }}.apk
+            app-${{ steps.v.outputs.N }}.apk
           generate_release_notes: true
