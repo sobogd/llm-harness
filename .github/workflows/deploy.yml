@@ -132,15 +132,14 @@ jobs:
           url1="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
           echo "GET $url1"
           rel_json=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$url1")
-          rel_id=$(printf '%s' "$rel_json" | jq -r '.id')
-          asset_id=$(printf '%s' "$rel_json" | jq -r --arg n "$apk" \
-            '.assets[] | select(.name == $n) | .id')
-          echo "rel_id=$rel_id asset_id=$asset_id"
-          if [ -z "$asset_id" ] || [ "$asset_id" = "null" ]; then
+          asset_url=$(printf '%s' "$rel_json" | jq -r --arg n "$apk" \
+            '.assets[] | select(.name == $n) | .url')
+          echo "asset_url=$asset_url"
+          if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
             echo "::error::asset $apk not found on release $tag"; exit 1
           fi
           curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
-            -o "$apk" "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${rel_id}/assets/${asset_id}"
+            -o "$apk" "$asset_url"
           sha256sum "$apk"
           mkdir -p rel && cp "$apk" rel/
 
