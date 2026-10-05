@@ -10,12 +10,19 @@ on:
       - 'requirements.txt'
       - 'scripts/deploy_bridge.sh'
       - '.github/workflows/deploy.yml'
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       smoke_ask:
         description: Run a real /ask against the canary before switching
         required: false
         default: 'false'
+        type: string
+      release_tag:
+        description: Sync this release tag (app-N) to the VPS. Empty = skip
+        required: false
+        default: ''
         type: string
 
 concurrency:
@@ -24,6 +31,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
       VPS_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
@@ -57,6 +65,7 @@ jobs:
           stage=$(mktemp -d)
           cp -R bridge llm_harness proto requirements.txt "$stage"/
           rsync -az --delete --exclude .venv --exclude __pycache__ --exclude '*.pyc' \
+            --exclude secrets --exclude releases \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
             "$stage"/ "${VPS_USER}@${VPS_HOST}:/opt/llm-bridge/"
           rm -rf "$stage"
@@ -83,3 +92,82 @@ jobs:
             exit 1
           fi
           echo "post-deploy verify ok (status=$code)"
+
+  sync-release:
+    if: github.event_name == 'release' || inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+      VPS_USER: ${{ secrets.DEPLOY_SSH_USER }}
+    steps:
+      - name: "Preflight: required secrets"
+        env:
+          K: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          H: ${{ secrets.DEPLOY_SSH_HOST }}
+        run: |
+          for v in K H; do
+            if [ -z "${!v}" ]; then echo "::error::required secret ($v) is empty"; exit 1; fi
+          done
+          echo preflight ok
+
+      - name: Resolve release tag
+        id: rel
+        env:
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          T="${TAG#app-}"
+          case "$T" in
+            ''|*[!0-9]*) echo "::error::bad release tag: $TAG (expect app-<N>)"; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "apk=app-${T}.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Download release asset from GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          apk="${{ steps.rel.outputs.apk }}"
+          tag="${{ steps.rel.outputs.tag }}"
+          rel_json=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")
+          rel_id=$(printf '%s' "$rel_json" | jq -r '.id')
+          asset_id=$(printf '%s' "$rel_json" | jq -r --arg n "$apk" \
+            '.assets[] | select(.name == $n) | .id')
+          if [ -z "$asset_id" ] || [ "$asset_id" = "null" ]; then
+            echo "::error::asset $apk not found on release $tag"; exit 1
+          fi
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+            -o "$apk" "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${rel_id}/assets/${asset_id}"
+          sha256sum "$apk"
+          mkdir -p rel && cp "$apk" rel/
+
+      - name: Rsync APK to VPS
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            "${VPS_USER}@${VPS_HOST}" 'mkdir -p /opt/llm-bridge/releases'
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
+            rel/ "${VPS_USER}@${VPS_HOST}:/opt/llm-bridge/releases/"
+
+      - name: Verify update endpoints
+        run: |
+          apk="${{ steps.rel.outputs.apk }}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://${VPS_HOST}/update/manifest")
+          if [ "$code" != "200" ]; then
+            echo "manifest returned $code"; exit 1
+          fi
+          curl -fsS "http://${VPS_HOST}/update/manifest"; echo
+          remote_len=$(curl -sI "http://${VPS_HOST}/update/${apk}" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-length"{print $2}')
+          local_len=$(stat -f %z "rel/${apk}" 2>/dev/null || stat -c %s "rel/${apk}")
+          if [ -z "$remote_len" ] || [ "$remote_len" != "$local_len" ]; then
+            echo "apk length mismatch: remote=${remote_len:-none} local=$local_len"
+            exit 1
+          fi
+          echo "sync-release ok: $apk ($local_len bytes)"
