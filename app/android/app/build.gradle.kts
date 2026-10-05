@@ -14,6 +14,19 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    val keystoreFile = System.getenv("LLMH_KEYSTORE_FILE")
+
+    signingConfigs {
+        if (keystoreFile != null) {
+            create("release") {
+                storeFile = file(keystoreFile)
+                storePassword = System.getenv("LLMH_KEYSTORE_PASS")
+                keyAlias = System.getenv("LLMH_KEY_ALIAS")
+                keyPassword = System.getenv("LLMH_KEY_PASS")
+            }
+        }
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "harness.iqfactura.agent"
@@ -31,9 +44,7 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystoreFile != null) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
         }
     }
 }

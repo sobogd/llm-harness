@@ -59,12 +59,24 @@ jobs:
         working-directory: app
         run: flutter pub get
 
+      - name: restore release keystore
+        env:
+          B64: ${{ secrets.LLMH_ANDROID_KEYSTORE_B64 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "$B64" | base64 -d > "$RUNNER_TEMP/keys/release.keystore"
+          ls -l "$RUNNER_TEMP/keys/release.keystore"
+
       - name: build apk
         env:
           APP_VERSION: ${{ steps.v.outputs.N }}
           SERVER_URL: ${{ secrets.APP_SERVER_URL || 'https://llm.iq-factura.com' }}
           UPDATE_BASE_URL: ${{ secrets.APP_UPDATE_BASE_URL || secrets.APP_SERVER_URL || 'https://llm.iq-factura.com' }}
           APP_AUTH_TOKEN: ${{ secrets.APP_AUTH_TOKEN }}
+          LLMH_KEYSTORE_FILE: "$RUNNER_TEMP/keys/release.keystore"
+          LLMH_KEYSTORE_PASS: ${{ secrets.LLMH_ANDROID_KEYSTORE_PASSWORD }}
+          LLMH_KEY_ALIAS: ${{ vars.LLMH_ANDROID_KEY_ALIAS }}
+          LLMH_KEY_PASS: ${{ secrets.LLMH_ANDROID_KEY_PASSWORD }}
         working-directory: app
         run: |
           echo "==> flutter: version=$APP_VERSION  SERVER_URL=$SERVER_URL  UPDATE_BASE_URL=$UPDATE_BASE_URL  AUTH_TOKEN=<set>"
