@@ -1,0 +1,96 @@
+name: build-apk
+
+on:
+  push:
+    tags:
+      - 'app-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release number N (tag app-<N>)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
+env:
+  SERVER_URL_DEFAULT: https://llm.iq-factura.com
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      APP_VERSION: ${{ startsWith(github.ref, 'refs/tags/app-') && replace(github.ref_name, 'app-', '') || inputs.version }}
+      SERVER_URL: ${{ secrets.APP_SERVER_URL || 'https://llm.iq-factura.com' }}
+      UPDATE_BASE_URL: ${{ secrets.APP_UPDATE_BASE_URL || secrets.APP_SERVER_URL || 'https://llm.iq-factura.com' }}
+    steps:
+      - name: "Preflight: version and required secrets"
+        env:
+          T: ${{ secrets.APP_AUTH_TOKEN }}
+          N: ${{ env.APP_VERSION }}
+        run: |
+          if [ -z "$N" ] || ! printf '%s' "$N" | grep -Eq '^[0-9]+$'; then
+            echo "::error::release number N must be a positive integer (got: $N)"; exit 1
+          fi
+          if [ -z "$T" ]; then echo "::error::secret APP_AUTH_TOKEN is empty"; exit 1; fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - uses: actions/setup-android@v4
+
+      - name: pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: build apk
+        env:
+          APP_AUTH_TOKEN: ${{ secrets.APP_AUTH_TOKEN }}
+        working-directory: app
+        run: |
+          echo "==> flutter: version=$APP_VERSION  SERVER_URL=$SERVER_URL  UPDATE_BASE_URL=$UPDATE_BASE_URL  AUTH_TOKEN=<set>"
+          flutter build apk --release \
+            --dart-define=SERVER_URL="$SERVER_URL" \
+            --dart-define=AUTH_TOKEN="$APP_AUTH_TOKEN" \
+            --dart-define=UPDATE_BASE_URL="$UPDATE_BASE_URL" \
+            --dart-define=APP_VERSION="$APP_VERSION"
+
+      - name: rename artifact
+        run: |
+          cp app/build/app/outputs/flutter-apk/app-release.apk "app-${APP_VERSION}.apk"
+          sha256sum "app-${APP_VERSION}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: app-*.apk
+
+      - name: tag from dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "app-${APP_VERSION}"
+          git push origin "app-${APP_VERSION}"
+
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "app-${{ env.APP_VERSION }}"
+          name: "app-${{ env.APP_VERSION }}"
+          files: |
+            app-${{ env.APP_VERSION }}.apk
+          generate_release_notes: true
