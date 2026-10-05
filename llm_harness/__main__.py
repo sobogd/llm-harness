@@ -25,8 +25,6 @@ async def main() -> None:
     ap.add_argument("--max-output", type=int, default=8_192)
     ap.add_argument("--no-thinking", action="store_true")
     ap.add_argument("--thinking-effort", default="medium")
-    ap.add_argument("--releases-dir", default=None,
-                    help="folder with app-<N>.apk releases (default <repo>/releases)")
     args = ap.parse_args()
 
     settings = Settings(
@@ -49,13 +47,7 @@ async def main() -> None:
     await grpc_server.start()
     print(f"[harness] gRPC listening on :{args.port_grpc}", flush=True)
 
-    from pathlib import Path
-
-    from .update import DEFAULT_RELEASES_DIR
-    releases_dir = Path(args.releases_dir) if args.releases_dir \
-        else DEFAULT_RELEASES_DIR
-    sse_app = create_app(harness, releases_dir=releases_dir)
-    print(f"[harness] releases dir {releases_dir}", flush=True)
+    sse_app = create_app(harness)
     uvi_config = uvicorn.Config(sse_app, host="127.0.0.1",
                                 port=args.port_sse, log_level="warning",
                                 timeout_graceful_shutdown=10)

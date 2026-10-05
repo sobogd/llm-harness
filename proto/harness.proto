@@ -57,6 +57,11 @@ service Harness {
   // currently loaded one its history is discarded and a fresh session starts
   // (same precondition as NewSession).
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionReply);
+
+  // Rename a session (active or archived): sets a display name that
+  // overrides the preview in ListSessions. Empty name clears it.
+  // Allowed while a run is active.
+  rpc RenameSession(RenameSessionRequest) returns (RenameSessionReply);
 }
 
 message Empty {}
@@ -169,6 +174,7 @@ message SessionInfo {
   int64 created_ms = 4;            // unix ms (0 = unknown)
   int64 updated_ms = 5;            // unix ms of last activity
   bool active = 6;                 // is this the current session?
+  string name = 7;                 // display name ("" = use preview)
 }
 
 message ListSessionsReply {
@@ -187,4 +193,14 @@ message DeleteSessionReply {
   bool ok = 1;
   string deleted = 2;              // id of the removed session
   string session_id = 3;           // current session id after the operation
+}
+
+message RenameSessionRequest {
+  string session_id = 1;
+  string name = 2;                 // empty = clear the name
+}
+
+message RenameSessionReply {
+  bool ok = 1;
+  string error = 2;
 }

@@ -420,6 +420,19 @@ class Harness:
         return {"session_id": self.session_id, "state": self.state,
                 "loaded": True}
 
+    async def rename_session(self, session_id: str, name: str) -> dict:
+        if not session_id:
+            raise ValueError("session_id is empty")
+        if session_id == self.session_id:
+            await self.store.flush()   # make the active file visible on disk
+            self.store.rename(session_id, name)
+            await self.store.flush()
+        elif not self.store.rename(session_id, name):
+            raise ValueError(f"session {session_id} not found")
+        await self.events.publish("session_renamed",
+                                  session_id=session_id, name=name)
+        return {"ok": True, "session_id": session_id, "name": name}
+
     async def delete_session(self, session_id: str) -> dict:
         if not session_id:
             raise ValueError("session_id is empty")

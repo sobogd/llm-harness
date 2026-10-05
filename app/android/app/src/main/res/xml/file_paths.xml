@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<paths>
-    <!-- Приложение скачивает APK в <files>/updates/. -->
-    <files-path name="updates" path="updates/" />
-    <!-- На всякий случай открываем корень файлов кеша и внешних данных. -->
-    <files-path name="files" path="." />
-    <cache-path name="cache" path="." />
-    <external-files-path name="ext" path="." />
-</paths>

@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in llm_harness_pb2_grpc.py depends on'
+        + ' but the generated code in harness_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -92,6 +92,11 @@ class HarnessStub:
                 '/harness.v1.Harness/DeleteSession',
                 request_serializer=llm__harness__pb2.DeleteSessionRequest.SerializeToString,
                 response_deserializer=llm__harness__pb2.DeleteSessionReply.FromString,
+                _registered_method=True)
+        self.RenameSession = channel.unary_unary(
+                '/harness.v1.Harness/RenameSession',
+                request_serializer=llm__harness__pb2.RenameSessionRequest.SerializeToString,
+                response_deserializer=llm__harness__pb2.RenameSessionReply.FromString,
                 _registered_method=True)
 
 
@@ -197,6 +202,15 @@ class HarnessServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RenameSession(self, request, context):
+        """Rename a session (active or archived): sets a display name that
+        overrides the preview in ListSessions. Empty name clears it.
+        Allowed while a run is active.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_HarnessServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -254,6 +268,11 @@ def add_HarnessServicer_to_server(servicer, server):
                     servicer.DeleteSession,
                     request_deserializer=llm__harness__pb2.DeleteSessionRequest.FromString,
                     response_serializer=llm__harness__pb2.DeleteSessionReply.SerializeToString,
+            ),
+            'RenameSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.RenameSession,
+                    request_deserializer=llm__harness__pb2.RenameSessionRequest.FromString,
+                    response_serializer=llm__harness__pb2.RenameSessionReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -557,6 +576,33 @@ class Harness:
             '/harness.v1.Harness/DeleteSession',
             llm__harness__pb2.DeleteSessionRequest.SerializeToString,
             llm__harness__pb2.DeleteSessionReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RenameSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/harness.v1.Harness/RenameSession',
+            llm__harness__pb2.RenameSessionRequest.SerializeToString,
+            llm__harness__pb2.RenameSessionReply.FromString,
             options,
             channel_credentials,
             insecure,

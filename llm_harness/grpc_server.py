@@ -113,6 +113,19 @@ class HarnessServicer(pb_grpc.HarnessServicer):
                                      deleted=r.get("deleted", ""),
                                      session_id=r.get("session_id", ""))
 
+    def RenameSession(self, req, ctx) -> pb.RenameSessionReply:
+        try:
+            r = asyncio_run(self.h.rename_session(req.session_id, req.name))
+        except ValueError as e:
+            msg = str(e)
+            ctx.abort(
+                grpc.StatusCode.NOT_FOUND if "not found" in msg
+                else grpc.StatusCode.INVALID_ARGUMENT, msg)
+        except Exception as e:
+            ctx.abort(grpc.StatusCode.INTERNAL, str(e))
+        return pb.RenameSessionReply(ok=r.get("ok", True),
+                                     error="")
+
     def Status(self, req, ctx) -> pb.StatusReply:
         st = asyncio_run(self.h.status())
         return pb.StatusReply(
