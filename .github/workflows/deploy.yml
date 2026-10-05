@@ -129,12 +129,10 @@ jobs:
           set -euo pipefail
           apk="${{ steps.rel.outputs.apk }}"
           tag="${{ steps.rel.outputs.tag }}"
-          url1="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
-          echo "GET $url1"
-          rel_json=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$url1")
+          rel_json=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")
           asset_url=$(printf '%s' "$rel_json" | jq -r --arg n "$apk" \
             '.assets[] | select(.name == $n) | .url')
-          echo "asset_url=$asset_url"
           if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
             echo "::error::asset $apk not found on release $tag"; exit 1
           fi
@@ -166,7 +164,7 @@ jobs:
           fi
           curl -fsS "http://${VPS_HOST}/update/manifest"; echo
           remote_len=$(curl -sI "http://${VPS_HOST}/update/${apk}" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-length"{print $2}')
-          local_len=$(stat -f %z "rel/${apk}" 2>/dev/null || stat -c %s "rel/${apk}")
+          local_len=$(stat -c %s "rel/${apk}")
           if [ -z "$remote_len" ] || [ "$remote_len" != "$local_len" ]; then
             echo "apk length mismatch: remote=${remote_len:-none} local=$local_len"
             exit 1
