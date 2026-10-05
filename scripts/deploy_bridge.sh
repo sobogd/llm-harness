@@ -3,8 +3,12 @@ set -euo pipefail
 
 # Zero-downtime blue/green deploy of llm-bridge (pm2, ports 18830/18831).
 # Code must already be synced into /opt/llm-bridge (never touch its .venv).
-# Env: BRIDGE_TOKEN (required), SMOKE_ASK=1 (optional real /ask test on canary).
+# Token: from /opt/llm-bridge/secrets/defs.json (AUTH_TOKEN — the same value
+# the APKs are built with); BRIDGE_TOKEN env overrides it. SMOKE_ASK=1 runs
+# a real /ask test on the canary.
 SRC=/opt/llm-bridge
+TOKEN_FILE="$SRC/secrets/defs.json"
+BRIDGE_TOKEN=${BRIDGE_TOKEN:-$(python3 -c "import json; print(json.load(open('$TOKEN_FILE'))['AUTH_TOKEN'])")}
 ACTIVE_FILE=/root/.llm-bridge-active
 GRPC=${BRIDGE_GRPC:-127.0.0.1:19000}
 SSE=${BRIDGE_SSE:-http://127.0.0.1:19001/events}

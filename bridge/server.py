@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import os
+import re
 import signal
 import sys
 from collections import deque
@@ -21,6 +23,47 @@ from llm_harness import llm_harness_pb2_grpc as pb_grpc
 
 DEFAULT_CONFIG = os.path.expanduser("~/.llm-bridge.json")
 RING_FRAMES = 1024
+DEFAULT_RELEASES_DIR = "/opt/llm-bridge/releases"
+
+_MANIFEST_CACHE: dict[tuple, dict] = {}
+
+
+def scan_releases(releases_dir: str) -> dict | None:
+    """Manifest for the newest app-<N>.apk in releases_dir (or None)."""
+    if not os.path.isdir(releases_dir):
+        return None
+    best = None
+    try:
+        names = os.listdir(releases_dir)
+    except OSError:
+        return None
+    for name in names:
+        if not name.endswith(".apk"):
+            continue
+        m = re.match(r"app-(\d+)\.apk$", name)
+        ver = int(m.group(1)) if m else 0
+        if best is None or ver > best["version"]:
+            try:
+                st = os.stat(os.path.join(releases_dir, name))
+            except OSError:
+                continue
+            best = {"version": ver, "filename": name, "size": st.st_size,
+                    "mtime": st.st_mtime, "path": os.path.join(releases_dir, name)}
+    if best is None:
+        return None
+    key = (best["filename"], best["size"], best["mtime"])
+    ent = _MANIFEST_CACHE.get(key)
+    if ent is None:
+        h = hashlib.sha256()
+        with open(best["path"], "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        ent = {"version": best["version"], "filename": best["filename"],
+               "size": best["size"], "sha256": h.hexdigest()}
+        _MANIFEST_CACHE[key] = ent
+        if len(_MANIFEST_CACHE) > 16:
+            _MANIFEST_CACHE.pop(next(iter(_MANIFEST_CACHE)))
+    return ent
 
 
 class Bridge:
@@ -28,6 +71,7 @@ class Bridge:
         self.token = cfg["token"]
         self.grpc_target = cfg.get("grpc", "127.0.0.1:19000")
         self.sse_url = cfg.get("sse", "http://127.0.0.1:19001/events")
+        self.releases_dir = cfg.get("releases_dir", DEFAULT_RELEASES_DIR)
         self.ring: deque[bytes] = deque(maxlen=RING_FRAMES)
         self.subs: set[asyncio.Queue] = set()
         self.channel = grpc.aio.insecure_channel(self.grpc_target)
@@ -192,77 +236,30 @@ class Bridge:
             self.subs.discard(q)
         return resp
 
-    @property
-    def sse_base(self) -> str:
-        """Base URL of the harness SSE server (strip the trailing /events)."""
-        base = self.sse_url
-        if base.endswith("/events"):
-            base = base[: -len("/events")]
-        return base
-
-    async def _proxy_update(self, request: web.Request, sub: str):
-        """Stream /update/<sub> through to the harness SSE server.
-
-        The APK (and manifest) live on the mac; we just tunnel them back.
-        Public (no token): releases are meant to be distributable to any
-        phone. The file is streamed, not buffered, so a large APK doesn't
-        eat bridge memory.
-        """
-        url = f"{self.sse_base}/update/{sub}"
-        try:
-            timeout = aiohttp.ClientTimeout(total=None, sock_read=120)
-            async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.get(url) as r:
-                    if r.status != 200:
-                        return web.Response(
-                            status=r.status, body=await r.read(),
-                            headers={"Content-Type": "application/json"})
-                    headers = {
-                        "Content-Type":
-                            r.headers.get("Content-Type",
-                                          "application/octet-stream"),
-                        "Cache-Control": "no-store",
-                        "X-Accel-Buffering": "no",
-                    }
-                    cl = r.headers.get("Content-Length")
-                    if cl:
-                        headers["Content-Length"] = cl
-                    resp = web.StreamResponse(status=200, headers=headers)
-                    await resp.prepare(request)
-                    async for chunk in r.content.iter_any():
-                        if not await self._send(resp, chunk):
-                            break
-                    return resp
-        except (ClientError, ConnectionError) as e:
-            return web.Response(status=502, text=f"upstream {e!r}")
-
     async def update_manifest(self, request: web.Request):
-        return await self._proxy_update(request, "manifest")
+        rel = scan_releases(self.releases_dir)
+        if rel is None:
+            return web.Response(status=404, text="no release yet")
+        return web.json_response(rel, headers={"Cache-Control": "no-store"})
 
     async def update_file(self, request: web.Request):
-        return await self._proxy_update(request,
-                                        request.match_info["filename"])
+        name = request.match_info["filename"]
+        if not name.endswith(".apk"):
+            return web.Response(status=404, text="not found")
+        real_dir = os.path.realpath(self.releases_dir)
+        real = os.path.realpath(os.path.join(self.releases_dir, name))
+        if not real.startswith(real_dir + os.sep) or not os.path.isfile(real):
+            return web.Response(status=404, text="not found")
+        return web.FileResponse(real, headers={"Cache-Control": "no-store",
+                                               "X-Accel-Buffering": "no"})
 
     async def update_index(self, request: web.Request):
-        """GET /update -> 302 to the latest release (public, no token).
-
-        Fetch the manifest and bounce the client to /update/<latest>.apk so
-        `curl -L https://host/update` downloads the newest build directly.
-        """
-        url = f"{self.sse_base}/update/manifest"
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(url) as r:
-                    if r.status != 200:
-                        return web.Response(status=404, text="no release yet")
-                    data = await r.json()
-        except (ClientError, ConnectionError):
-            return web.Response(status=502, text="upstream unreachable")
-        filename = data.get("filename")
-        if not filename or int(data.get("version", 0) or 0) <= 0:
+        """GET /update -> 302 to the latest release (public, no token)."""
+        rel = scan_releases(self.releases_dir)
+        if rel is None:
             return web.Response(status=404, text="no release yet")
         return web.Response(status=302,
-                            headers={"Location": f"/update/{filename}"})
+                            headers={"Location": f"/update/{rel['filename']}"})
 
     async def upstream(self) -> None:
         while True:
@@ -288,10 +285,12 @@ class Bridge:
                         buf += line
                         if line == b"\n":
                             frame, buf = buf, b""
-                            if frame.strip():
-                                self.ring.append(frame)
-                                for q in list(self.subs):
-                                    q.put_nowait(frame)
+                            stripped = frame.strip()
+                            if not stripped or stripped.startswith(b":"):
+                                continue
+                            self.ring.append(frame)
+                            for q in list(self.subs):
+                                q.put_nowait(frame)
         finally:
             up_ok = False
             try:
