@@ -6,6 +6,7 @@ import json
 import os
 import time
 import uuid
+from pathlib import Path
 
 from .compaction import compact
 from .config import Settings
@@ -84,12 +85,13 @@ def load_rules(path: str) -> str:
     return "\n".join(ln for ln in lines if ln)
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(root: str) -> str:
     rules = load_rules(RULES_FILE)
     env = environment_report()
     return (CORE_PROMPT
             + DELEGATION_PROMPT
             + TASK_MODE_PROMPT
+            + (f"\nWorkspace root: {root}" if root else "")
             + ("\n" + env if env else "")
             + ("\nRules:\n" + rules if rules else ""))
 
@@ -100,13 +102,13 @@ class RunStopped(Exception):
 
 class Harness:
     def __init__(self, root: str, settings: Settings | None = None):
-        self.root = root
+        self.root = str(Path(str(root)).expanduser().resolve())
         self.settings = settings or Settings()
         self.settings.validate()
         self.events = EventBus()
         self.client = LLMClient(self.settings)
         self.session_id = str(uuid.uuid4())
-        self.system_prompt = build_system_prompt()
+        self.system_prompt = build_system_prompt(self.root)
         self.history: list[dict] = [{"role": "system", "content": self.system_prompt}]
         self.state = "idle"            # idle | running | stopped | done | error
         self.run_id: str | None = None
@@ -121,8 +123,10 @@ class Harness:
         self._turn_active = asyncio.Event()   # set while an LLM turn is in flight
         self._compact_in_flight = asyncio.Lock()
         self._active_subagents: list[str] = []
+        self._seen_roots: list[str] = [self.root, *self._load_seen_roots()]
+        self._seen_roots = list(dict.fromkeys(self._seen_roots))
         # ---- phase 6: JSONL persistence + restore
-        self.store = SessionStore(root)
+        self.store = SessionStore(self.root)
         self._apply_loaded(self.store.load())
 
     def _apply_loaded(self, data: dict | None) -> None:
@@ -161,7 +165,8 @@ class Harness:
             await self.events.publish("session_loaded",
                                       path=self.store.loaded_from or "",
                                       messages=len(self.history),
-                                      state=self.state)
+                                      state=self.state,
+                                      root=self.root)
         else:
             self.store.record({"type": "meta",
                                "session_id": self.session_id,
@@ -351,10 +356,79 @@ class Harness:
             return info
 
     # ---------------------------------------------------- New session
+    def _norm_root(self, root: str) -> str:
+        """"" (or the current root) to an absolute, resolved path."""
+        root = str(root or "").strip()
+        if not root:
+            return self.root
+        return str(Path(root).expanduser().resolve())
+
+    def _remember_root(self, root: str) -> None:
+        if root not in self._seen_roots:
+            self._seen_roots.append(root)
+            self._save_seen_roots()
+
+    @staticmethod
+    def _seen_roots_path() -> Path:
+        return Path.home() / ".llm-harness" / "seen_roots.json"
+
+    @classmethod
+    def _load_seen_roots(cls) -> list[str]:
+        try:
+            data = json.loads(cls._seen_roots_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [str(r) for r in data if isinstance(r, str) and r] if isinstance(data, list) else []
+
+    def _save_seen_roots(self) -> None:
+        path = self._seen_roots_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._seen_roots), encoding="utf-8")
+        except OSError:
+            pass
+
+    async def _switch_root(self, target: str) -> None:
+        """Change the working folder (and its session store).
+        The caller archives (or resets) the current session first.
+        """
+        target = self._norm_root(target)
+        if target == self.root:
+            return
+        await self.store.close()
+        self.root = target
+        self.store = SessionStore(target)
+        self._remember_root(target)
+
+    async def _park_leftover(self, data: dict | None) -> None:
+        """The active file of the root we switched to may hold a session from
+        a previous daemon life (crash/kill left it unarchived). Park it:
+        archive real content, drop an empty shell.
+        """
+        if data is None:
+            return
+        sid = (data.get("meta") or {}).get("session_id") or ""
+        if len(data["history"]) <= 1:
+            self.store.reset()
+            return
+        await self.store.flush()
+        self.store.archive(sid)
+
+    def _root_has_session(self, root: str, session_id: str) -> bool:
+        """Does session_id exist (active or archived) under root?"""
+        root = self._norm_root(root)
+        store = self.store if root == self.root else SessionStore(root, create=False)
+        if store.archive_path(session_id).exists():
+            return True
+        if store.path.exists():
+            meta = (store._replay(store.path) or {}).get("meta") or {}
+            return meta.get("session_id") == session_id
+        return False
+
     def _fresh_session(self) -> dict:
         self.session_id = str(uuid.uuid4())
         self.client.new_session_id()
-        self.system_prompt = build_system_prompt()
+        self.system_prompt = build_system_prompt(self.root)
         self.history = [{"role": "system", "content": self.system_prompt}]
         self.run_id = None
         self.turn = 0
@@ -386,21 +460,58 @@ class Harness:
         except Exception:
             pass
 
-    async def new_session(self) -> dict:
+    async def new_session(self, root: str = "") -> dict:
+        """Discard the conversation and start a fresh session.
+        The previous session (if it has messages) is archived first, so it
+        shows up in list_sessions. root selects the working folder for the
+        new session ("" = keep the current one).
+        """
         if self.state == "running":
             raise ValueError("run in progress — stop it first")
+        target = self._norm_root(root)
         await self._archive_current()
+        if target != self.root:
+            await self._switch_root(target)
+            await self._park_leftover(self.store.load())
         r = self._fresh_session()
         await self.store.flush()      # make the fresh file visible to listers
         await self.events.publish("session_reset",
-                                  session_id=self.session_id, messages=1)
+                                  session_id=self.session_id, messages=1,
+                                  root=self.root)
         return r
 
     # ------------------------------------------------ Session management
-    async def list_sessions(self) -> dict:
-        return {"sessions": self.store.list_sessions(self.session_id)}
+    async def list_sessions(self, root: str = "") -> dict:
+        """The loaded session plus every archived one, newest first.
+        root selects one folder; empty = union of every folder this daemon
+        has been in (each entry carries its "root").
+        """
+        target = self._norm_root(root)
+        # "" (or the current root) = union of every folder this daemon has
+        # been in; otherwise just the asked folder (and remember it for the union)
+        if target == self.root:
+            roots = self._seen_roots
+        else:
+            self._remember_root(target)
+            roots = [target]
+        seen: set[str] = set()
+        sessions: list[dict] = []
+        for r in roots:
+            if r in seen:
+                continue
+            seen.add(r)
+            store = self.store if r == self.root else SessionStore(r, create=False)
+            sessions.extend(store.list_sessions(self.session_id if r == self.root else ""))
+        sessions.sort(key=lambda e: e["updated_ms"], reverse=True)
+        return {"sessions": sessions}
 
-    async def load_session(self, session_id: str) -> dict:
+    async def load_session(self, session_id: str, root: str = "") -> dict:
+        """Load an archived session as the current one (its content is copied
+        back to the active session file and replayed into RAM). The current
+        session is archived first (if it has messages). root selects the
+        folder to look in ("" = the current one); a different folder moves
+        the whole workspace, same as new_session(root).
+        """
         if not session_id:
             raise ValueError("session_id is empty")
         if self.state == "running":
@@ -408,35 +519,65 @@ class Harness:
         if session_id == self.session_id:
             return {"session_id": self.session_id,
                     "state": self.state, "loaded": False}
-        await self._archive_current()
-        data = self.store.restore_from(session_id)
+        target = self._norm_root(root)
+        if not self._root_has_session(target, session_id):
+            if target != self.root and self._root_has_session(self.root, session_id):
+                target = self.root      # caller's root is stale; the session
+                                        # lives where the daemon is now
+            else:
+                raise ValueError(f"session {session_id} not found")
+        if target != self.root:
+            await self._archive_current()
+            await self._switch_root(target)
+            data = self.store.load()
+            # the leftover active file may already be the wanted session
+            # (left by a previous daemon life): keep it, otherwise park it
+            # and restore from the archive
+            if data is None or (data.get("meta") or {}).get("session_id") != session_id:
+                await self._park_leftover(data)
+                data = self.store.restore_from(session_id)
+        else:
+            await self._archive_current()
+            data = self.store.restore_from(session_id)
         if data is None:
             raise ValueError(f"session {session_id} not found")
         self._apply_loaded(data)
+        await self.store.flush()
         await self.events.publish("session_loaded",
                                   path=self.store.loaded_from or "",
                                   messages=len(self.history),
-                                  state=self.state)
+                                  state=self.state,
+                                  root=self.root)
         return {"session_id": self.session_id, "state": self.state,
                 "loaded": True}
 
-    async def rename_session(self, session_id: str, name: str) -> dict:
+    async def rename_session(self, session_id: str, name: str, root: str = "") -> dict:
         if not session_id:
             raise ValueError("session_id is empty")
-        if session_id == self.session_id:
+        target = self._norm_root(root)
+        if session_id == self.session_id and target == self.root:
             await self.store.flush()   # make the active file visible on disk
             self.store.rename(session_id, name)
             await self.store.flush()
-        elif not self.store.rename(session_id, name):
-            raise ValueError(f"session {session_id} not found")
+        else:
+            # archived copy, or an active file under another folder — do it
+            # in place through a read-only store, no root switch
+            store = self.store if target == self.root else SessionStore(target, create=False)
+            if session_id == self.session_id:
+                await self.store.flush()
+            if not store.rename(session_id, name):
+                raise ValueError(f"session {session_id} not found")
+            if store is not self.store:
+                await store.flush()      # queued rename on a throwaway store
         await self.events.publish("session_renamed",
                                   session_id=session_id, name=name)
         return {"ok": True, "session_id": session_id, "name": name}
 
-    async def delete_session(self, session_id: str) -> dict:
+    async def delete_session(self, session_id: str, root: str = "") -> dict:
         if not session_id:
             raise ValueError("session_id is empty")
-        if session_id == self.session_id:
+        target = self._norm_root(root)
+        if session_id == self.session_id and target == self.root:
             if self.state == "running":
                 raise ValueError("run in progress — stop it first")
             # also remove the archived copy (left behind when this session
@@ -450,17 +591,31 @@ class Harness:
             r = self._fresh_session()
             await self.store.flush()
             await self.events.publish("session_reset",
-                                      session_id=self.session_id, messages=1)
+                                      session_id=self.session_id, messages=1,
+                                      root=self.root)
             return {"ok": True, "deleted": session_id, **r}
-        data = self.store._replay(self.store.archive_path(session_id))
-        if data is None:
+        store = self.store if target == self.root else SessionStore(target, create=False)
+        active_data = store._replay(store.path) if store.path.exists() else None
+        active = (
+            (active_data or {}).get("meta", {}).get("session_id") == session_id
+            if isinstance(active_data, dict)
+            else False
+        )
+        data = store._replay(store.archive_path(session_id))
+        if data is None and not active:
             raise ValueError(f"session {session_id} not found")
-        ok = self.store.delete_archive(session_id)
-        if not ok:
+        if data is not None and not store.delete_archive(session_id):
             raise ValueError(f"session {session_id} not found")
+        # the session may also sit in this folder's active file (leftover
+        # from a root switch) — clear it so it doesn't resurface
+        if active:
+            store.reset()
+            if store is not self.store:
+                await store.flush()
         # drop the RAM KV that id may still hold (normally cleared at
         # archive time; belt and braces for pre-fix sessions)
-        mid = (data.get("meta") or {}).get("mtplx_session_id")
+        source = data if data is not None else active_data
+        mid = ((source or {}).get("meta") or {}).get("mtplx_session_id")
         if mid and mid != self.client.session_id:
             try:
                 await self.client.admin_clear_session(mid)
@@ -793,6 +948,7 @@ class Harness:
             "run": {"run_id": self.run_id or "", "state": self.state,
                     "turn": self.turn, "last_error": self.last_error or ""},
             "session_id": self.session_id,
+            "root": self.root,
             "history_messages": len(self.history),
             "prompt_tokens_last": self.last_prompt_tokens,
             "queue_depth": len(self.queue),

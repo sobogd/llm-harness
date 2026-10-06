@@ -40,12 +40,15 @@ service Harness {
   // Discard the conversation and start a fresh session (system prompt only).
   // The previous session (if it has messages) is archived first, so it shows
   // up in ListSessions. Allowed only when no run is active or paused.
-  rpc NewSession(Empty) returns (AskReply);
+  // root: switch the working folder for the new session ("" = keep the
+  // current one).
+  rpc NewSession(NewSessionRequest) returns (AskReply);
 
-  // All sessions: the currently loaded one plus the archived ones
-  // (<root>/.llm-harness/sessions/<id>.jsonl). Sorted by last update, newest
-  // first.
-  rpc ListSessions(Empty) returns (ListSessionsReply);
+  // All sessions of the daemon: the currently loaded one plus the archived
+  // ones (<root>/.llm-harness/sessions/<id>.jsonl). root selects one working
+  // folder ("" = every folder this daemon has been in, union). Each entry
+  // carries the folder it belongs to. Sorted by last update, newest first.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsReply);
 
   // Load an archived session as the current one (its content is copied back
   // to the active session file and replayed into RAM). The current session is
@@ -65,6 +68,14 @@ service Harness {
 }
 
 message Empty {}
+
+message NewSessionRequest {
+  string root = 1;                 // working folder ("" = keep the current one)
+}
+
+message ListSessionsRequest {
+  string root = 1;                 // one folder ("" = union of all known folders)
+}
 
 message AskRequest {
   string prompt = 1;                 // task text (required)
@@ -163,6 +174,7 @@ message StatusReply {
   string loaded_from = 9;           // path of the session JSONL ("" = fresh session)
   int32 persisted_messages = 10;    // messages in the current (restored/live) history
   repeated string active_subagents = 11; // ids of running subagents (empty when none)
+  string root = 12;                 // current working folder
 }
 
 // ---------------------------------------------------------- session mgmt
@@ -175,6 +187,7 @@ message SessionInfo {
   int64 updated_ms = 5;            // unix ms of last activity
   bool active = 6;                 // is this the current session?
   string name = 7;                 // display name ("" = use preview)
+  string root = 8;                 // working folder the session belongs to
 }
 
 message ListSessionsReply {
@@ -183,10 +196,12 @@ message ListSessionsReply {
 
 message LoadSessionRequest {
   string session_id = 1;
+  string root = 2;                 // which folder to look in ("" = current one)
 }
 
 message DeleteSessionRequest {
   string session_id = 1;
+  string root = 2;                 // which folder ("" = current one)
 }
 
 message DeleteSessionReply {
@@ -198,6 +213,7 @@ message DeleteSessionReply {
 message RenameSessionRequest {
   string session_id = 1;
   string name = 2;                 // empty = clear the name
+  string root = 3;                 // which folder ("" = current one)
 }
 
 message RenameSessionReply {

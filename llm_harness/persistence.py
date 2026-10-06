@@ -41,12 +41,14 @@ class SessionStore:
     background flusher writes them in order, so line order is preserved.
     """
 
-    def __init__(self, root: str):
-        self.dir = Path(root) / DIR_NAME
+    def __init__(self, root: str, create: bool = True):
+        self.root_dir = Path(str(root)).expanduser().resolve()
+        self.dir = self.root_dir / DIR_NAME
         self.path = self.dir / FILE_NAME
         self.sessions_dir = self.dir / SESSIONS_DIR
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self._pending: list[str] = []
         self._wake = asyncio.Event()
         self._idle = asyncio.Event()
@@ -251,7 +253,7 @@ class SessionStore:
         """All sessions (active + archived), newest activity first.
 
         Each entry: {"id", "preview", "name", "messages", "created_ms",
-                     "updated_ms", "active"}
+                     "updated_ms", "active", "root"}
         """
         out: list[dict] = []
 
@@ -274,17 +276,19 @@ class SessionStore:
                 "created_ms": int(meta.get("created") or 0),
                 "updated_ms": int(path.stat().st_mtime * 1000),
                 "active": sid == active_id,
+                "root": str(self.root_dir),
             })
 
+        active_sid: str | None = None
         if self.path.exists():
             meta = (self._replay(self.path) or {}).get("meta") or {}
-            entry(self.path, meta.get("session_id") or active_id)
+            active_sid = meta.get("session_id") or active_id
+            entry(self.path, active_sid)
         for f in sorted(self.sessions_dir.glob("*.jsonl")):
             meta = (self._replay(f) or {}).get("meta") or {}
             sid = meta.get("session_id") or _safe_id(f.stem)
-            if sid == active_id:
-                continue      # loaded back from the archive: the active file
-                              # is the source of truth — don't list it twice
+            if sid == active_id or sid == active_sid:
+                continue      # the active file is the source of truth
             entry(f, sid)
         out.sort(key=lambda e: e["updated_ms"], reverse=True)
         return out

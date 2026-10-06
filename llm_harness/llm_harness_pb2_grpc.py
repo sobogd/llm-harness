@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import llm_harness_pb2 as llm__harness__pb2
+from . import llm_harness_pb2 as harness__pb2
 
 GRPC_GENERATED_VERSION = '1.84.0'
 GRPC_VERSION = grpc.__version__
@@ -40,63 +40,63 @@ class HarnessStub:
         """
         self.Ask = channel.unary_unary(
                 '/harness.v1.Harness/Ask',
-                request_serializer=llm__harness__pb2.AskRequest.SerializeToString,
-                response_deserializer=llm__harness__pb2.AskReply.FromString,
+                request_serializer=harness__pb2.AskRequest.SerializeToString,
+                response_deserializer=harness__pb2.AskReply.FromString,
                 _registered_method=True)
         self.Stop = channel.unary_unary(
                 '/harness.v1.Harness/Stop',
-                request_serializer=llm__harness__pb2.Empty.SerializeToString,
-                response_deserializer=llm__harness__pb2.RunStatus.FromString,
+                request_serializer=harness__pb2.Empty.SerializeToString,
+                response_deserializer=harness__pb2.RunStatus.FromString,
                 _registered_method=True)
         self.Resume = channel.unary_unary(
                 '/harness.v1.Harness/Resume',
-                request_serializer=llm__harness__pb2.Empty.SerializeToString,
-                response_deserializer=llm__harness__pb2.RunStatus.FromString,
+                request_serializer=harness__pb2.Empty.SerializeToString,
+                response_deserializer=harness__pb2.RunStatus.FromString,
                 _registered_method=True)
         self.SetSettings = channel.unary_unary(
                 '/harness.v1.Harness/SetSettings',
-                request_serializer=llm__harness__pb2.Settings.SerializeToString,
-                response_deserializer=llm__harness__pb2.Settings.FromString,
+                request_serializer=harness__pb2.Settings.SerializeToString,
+                response_deserializer=harness__pb2.Settings.FromString,
                 _registered_method=True)
         self.Compact = channel.unary_unary(
                 '/harness.v1.Harness/Compact',
-                request_serializer=llm__harness__pb2.CompactRequest.SerializeToString,
-                response_deserializer=llm__harness__pb2.CompactReply.FromString,
+                request_serializer=harness__pb2.CompactRequest.SerializeToString,
+                response_deserializer=harness__pb2.CompactReply.FromString,
                 _registered_method=True)
         self.Status = channel.unary_unary(
                 '/harness.v1.Harness/Status',
-                request_serializer=llm__harness__pb2.Empty.SerializeToString,
-                response_deserializer=llm__harness__pb2.StatusReply.FromString,
+                request_serializer=harness__pb2.Empty.SerializeToString,
+                response_deserializer=harness__pb2.StatusReply.FromString,
                 _registered_method=True)
         self.GetMessages = channel.unary_unary(
                 '/harness.v1.Harness/GetMessages',
-                request_serializer=llm__harness__pb2.GetMessagesRequest.SerializeToString,
-                response_deserializer=llm__harness__pb2.GetMessagesReply.FromString,
+                request_serializer=harness__pb2.GetMessagesRequest.SerializeToString,
+                response_deserializer=harness__pb2.GetMessagesReply.FromString,
                 _registered_method=True)
         self.NewSession = channel.unary_unary(
                 '/harness.v1.Harness/NewSession',
-                request_serializer=llm__harness__pb2.Empty.SerializeToString,
-                response_deserializer=llm__harness__pb2.AskReply.FromString,
+                request_serializer=harness__pb2.NewSessionRequest.SerializeToString,
+                response_deserializer=harness__pb2.AskReply.FromString,
                 _registered_method=True)
         self.ListSessions = channel.unary_unary(
                 '/harness.v1.Harness/ListSessions',
-                request_serializer=llm__harness__pb2.Empty.SerializeToString,
-                response_deserializer=llm__harness__pb2.ListSessionsReply.FromString,
+                request_serializer=harness__pb2.ListSessionsRequest.SerializeToString,
+                response_deserializer=harness__pb2.ListSessionsReply.FromString,
                 _registered_method=True)
         self.LoadSession = channel.unary_unary(
                 '/harness.v1.Harness/LoadSession',
-                request_serializer=llm__harness__pb2.LoadSessionRequest.SerializeToString,
-                response_deserializer=llm__harness__pb2.AskReply.FromString,
+                request_serializer=harness__pb2.LoadSessionRequest.SerializeToString,
+                response_deserializer=harness__pb2.AskReply.FromString,
                 _registered_method=True)
         self.DeleteSession = channel.unary_unary(
                 '/harness.v1.Harness/DeleteSession',
-                request_serializer=llm__harness__pb2.DeleteSessionRequest.SerializeToString,
-                response_deserializer=llm__harness__pb2.DeleteSessionReply.FromString,
+                request_serializer=harness__pb2.DeleteSessionRequest.SerializeToString,
+                response_deserializer=harness__pb2.DeleteSessionReply.FromString,
                 _registered_method=True)
         self.RenameSession = channel.unary_unary(
                 '/harness.v1.Harness/RenameSession',
-                request_serializer=llm__harness__pb2.RenameSessionRequest.SerializeToString,
-                response_deserializer=llm__harness__pb2.RenameSessionReply.FromString,
+                request_serializer=harness__pb2.RenameSessionRequest.SerializeToString,
+                response_deserializer=harness__pb2.RenameSessionReply.FromString,
                 _registered_method=True)
 
 
@@ -169,15 +169,18 @@ class HarnessServicer:
         """Discard the conversation and start a fresh session (system prompt only).
         The previous session (if it has messages) is archived first, so it shows
         up in ListSessions. Allowed only when no run is active or paused.
+        root: switch the working folder for the new session ("" = keep the
+        current one).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def ListSessions(self, request, context):
-        """All sessions: the currently loaded one plus the archived ones
-        (<root>/.llm-harness/sessions/<id>.jsonl). Sorted by last update, newest
-        first.
+        """All sessions of the daemon: the currently loaded one plus the archived
+        ones (<root>/.llm-harness/sessions/<id>.jsonl). root selects one working
+        folder ("" = every folder this daemon has been in, union). Each entry
+        carries the folder it belongs to. Sorted by last update, newest first.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -216,63 +219,63 @@ def add_HarnessServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Ask': grpc.unary_unary_rpc_method_handler(
                     servicer.Ask,
-                    request_deserializer=llm__harness__pb2.AskRequest.FromString,
-                    response_serializer=llm__harness__pb2.AskReply.SerializeToString,
+                    request_deserializer=harness__pb2.AskRequest.FromString,
+                    response_serializer=harness__pb2.AskReply.SerializeToString,
             ),
             'Stop': grpc.unary_unary_rpc_method_handler(
                     servicer.Stop,
-                    request_deserializer=llm__harness__pb2.Empty.FromString,
-                    response_serializer=llm__harness__pb2.RunStatus.SerializeToString,
+                    request_deserializer=harness__pb2.Empty.FromString,
+                    response_serializer=harness__pb2.RunStatus.SerializeToString,
             ),
             'Resume': grpc.unary_unary_rpc_method_handler(
                     servicer.Resume,
-                    request_deserializer=llm__harness__pb2.Empty.FromString,
-                    response_serializer=llm__harness__pb2.RunStatus.SerializeToString,
+                    request_deserializer=harness__pb2.Empty.FromString,
+                    response_serializer=harness__pb2.RunStatus.SerializeToString,
             ),
             'SetSettings': grpc.unary_unary_rpc_method_handler(
                     servicer.SetSettings,
-                    request_deserializer=llm__harness__pb2.Settings.FromString,
-                    response_serializer=llm__harness__pb2.Settings.SerializeToString,
+                    request_deserializer=harness__pb2.Settings.FromString,
+                    response_serializer=harness__pb2.Settings.SerializeToString,
             ),
             'Compact': grpc.unary_unary_rpc_method_handler(
                     servicer.Compact,
-                    request_deserializer=llm__harness__pb2.CompactRequest.FromString,
-                    response_serializer=llm__harness__pb2.CompactReply.SerializeToString,
+                    request_deserializer=harness__pb2.CompactRequest.FromString,
+                    response_serializer=harness__pb2.CompactReply.SerializeToString,
             ),
             'Status': grpc.unary_unary_rpc_method_handler(
                     servicer.Status,
-                    request_deserializer=llm__harness__pb2.Empty.FromString,
-                    response_serializer=llm__harness__pb2.StatusReply.SerializeToString,
+                    request_deserializer=harness__pb2.Empty.FromString,
+                    response_serializer=harness__pb2.StatusReply.SerializeToString,
             ),
             'GetMessages': grpc.unary_unary_rpc_method_handler(
                     servicer.GetMessages,
-                    request_deserializer=llm__harness__pb2.GetMessagesRequest.FromString,
-                    response_serializer=llm__harness__pb2.GetMessagesReply.SerializeToString,
+                    request_deserializer=harness__pb2.GetMessagesRequest.FromString,
+                    response_serializer=harness__pb2.GetMessagesReply.SerializeToString,
             ),
             'NewSession': grpc.unary_unary_rpc_method_handler(
                     servicer.NewSession,
-                    request_deserializer=llm__harness__pb2.Empty.FromString,
-                    response_serializer=llm__harness__pb2.AskReply.SerializeToString,
+                    request_deserializer=harness__pb2.NewSessionRequest.FromString,
+                    response_serializer=harness__pb2.AskReply.SerializeToString,
             ),
             'ListSessions': grpc.unary_unary_rpc_method_handler(
                     servicer.ListSessions,
-                    request_deserializer=llm__harness__pb2.Empty.FromString,
-                    response_serializer=llm__harness__pb2.ListSessionsReply.SerializeToString,
+                    request_deserializer=harness__pb2.ListSessionsRequest.FromString,
+                    response_serializer=harness__pb2.ListSessionsReply.SerializeToString,
             ),
             'LoadSession': grpc.unary_unary_rpc_method_handler(
                     servicer.LoadSession,
-                    request_deserializer=llm__harness__pb2.LoadSessionRequest.FromString,
-                    response_serializer=llm__harness__pb2.AskReply.SerializeToString,
+                    request_deserializer=harness__pb2.LoadSessionRequest.FromString,
+                    response_serializer=harness__pb2.AskReply.SerializeToString,
             ),
             'DeleteSession': grpc.unary_unary_rpc_method_handler(
                     servicer.DeleteSession,
-                    request_deserializer=llm__harness__pb2.DeleteSessionRequest.FromString,
-                    response_serializer=llm__harness__pb2.DeleteSessionReply.SerializeToString,
+                    request_deserializer=harness__pb2.DeleteSessionRequest.FromString,
+                    response_serializer=harness__pb2.DeleteSessionReply.SerializeToString,
             ),
             'RenameSession': grpc.unary_unary_rpc_method_handler(
                     servicer.RenameSession,
-                    request_deserializer=llm__harness__pb2.RenameSessionRequest.FromString,
-                    response_serializer=llm__harness__pb2.RenameSessionReply.SerializeToString,
+                    request_deserializer=harness__pb2.RenameSessionRequest.FromString,
+                    response_serializer=harness__pb2.RenameSessionReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -304,8 +307,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/Ask',
-            llm__harness__pb2.AskRequest.SerializeToString,
-            llm__harness__pb2.AskReply.FromString,
+            harness__pb2.AskRequest.SerializeToString,
+            harness__pb2.AskReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -331,8 +334,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/Stop',
-            llm__harness__pb2.Empty.SerializeToString,
-            llm__harness__pb2.RunStatus.FromString,
+            harness__pb2.Empty.SerializeToString,
+            harness__pb2.RunStatus.FromString,
             options,
             channel_credentials,
             insecure,
@@ -358,8 +361,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/Resume',
-            llm__harness__pb2.Empty.SerializeToString,
-            llm__harness__pb2.RunStatus.FromString,
+            harness__pb2.Empty.SerializeToString,
+            harness__pb2.RunStatus.FromString,
             options,
             channel_credentials,
             insecure,
@@ -385,8 +388,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/SetSettings',
-            llm__harness__pb2.Settings.SerializeToString,
-            llm__harness__pb2.Settings.FromString,
+            harness__pb2.Settings.SerializeToString,
+            harness__pb2.Settings.FromString,
             options,
             channel_credentials,
             insecure,
@@ -412,8 +415,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/Compact',
-            llm__harness__pb2.CompactRequest.SerializeToString,
-            llm__harness__pb2.CompactReply.FromString,
+            harness__pb2.CompactRequest.SerializeToString,
+            harness__pb2.CompactReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -439,8 +442,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/Status',
-            llm__harness__pb2.Empty.SerializeToString,
-            llm__harness__pb2.StatusReply.FromString,
+            harness__pb2.Empty.SerializeToString,
+            harness__pb2.StatusReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -466,8 +469,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/GetMessages',
-            llm__harness__pb2.GetMessagesRequest.SerializeToString,
-            llm__harness__pb2.GetMessagesReply.FromString,
+            harness__pb2.GetMessagesRequest.SerializeToString,
+            harness__pb2.GetMessagesReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -493,8 +496,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/NewSession',
-            llm__harness__pb2.Empty.SerializeToString,
-            llm__harness__pb2.AskReply.FromString,
+            harness__pb2.NewSessionRequest.SerializeToString,
+            harness__pb2.AskReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -520,8 +523,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/ListSessions',
-            llm__harness__pb2.Empty.SerializeToString,
-            llm__harness__pb2.ListSessionsReply.FromString,
+            harness__pb2.ListSessionsRequest.SerializeToString,
+            harness__pb2.ListSessionsReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -547,8 +550,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/LoadSession',
-            llm__harness__pb2.LoadSessionRequest.SerializeToString,
-            llm__harness__pb2.AskReply.FromString,
+            harness__pb2.LoadSessionRequest.SerializeToString,
+            harness__pb2.AskReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -574,8 +577,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/DeleteSession',
-            llm__harness__pb2.DeleteSessionRequest.SerializeToString,
-            llm__harness__pb2.DeleteSessionReply.FromString,
+            harness__pb2.DeleteSessionRequest.SerializeToString,
+            harness__pb2.DeleteSessionReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -601,8 +604,8 @@ class Harness:
             request,
             target,
             '/harness.v1.Harness/RenameSession',
-            llm__harness__pb2.RenameSessionRequest.SerializeToString,
-            llm__harness__pb2.RenameSessionReply.FromString,
+            harness__pb2.RenameSessionRequest.SerializeToString,
+            harness__pb2.RenameSessionReply.FromString,
             options,
             channel_credentials,
             insecure,

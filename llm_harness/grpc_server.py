@@ -74,14 +74,14 @@ class HarnessServicer(pb_grpc.HarnessServicer):
 
     def NewSession(self, req, ctx) -> pb.AskReply:
         try:
-            r = asyncio_run(self.h.new_session())
+            r = asyncio_run(self.h.new_session(req.root))
         except ValueError as e:
             ctx.abort(grpc.StatusCode.FAILED_PRECONDITION, str(e))
         return pb.AskReply(session_id=r["session_id"], state="idle")
 
     def ListSessions(self, req, ctx) -> pb.ListSessionsReply:
         try:
-            r = asyncio_run(self.h.list_sessions())
+            r = asyncio_run(self.h.list_sessions(req.root))
         except Exception as e:
             ctx.abort(grpc.StatusCode.INTERNAL, str(e))
         return pb.ListSessionsReply(
@@ -89,7 +89,7 @@ class HarnessServicer(pb_grpc.HarnessServicer):
 
     def LoadSession(self, req, ctx) -> pb.AskReply:
         try:
-            r = asyncio_run(self.h.load_session(req.session_id))
+            r = asyncio_run(self.h.load_session(req.session_id, req.root))
         except ValueError as e:
             msg = str(e)
             ctx.abort(
@@ -101,7 +101,7 @@ class HarnessServicer(pb_grpc.HarnessServicer):
 
     def DeleteSession(self, req, ctx) -> pb.DeleteSessionReply:
         try:
-            r = asyncio_run(self.h.delete_session(req.session_id))
+            r = asyncio_run(self.h.delete_session(req.session_id, req.root))
         except ValueError as e:
             msg = str(e)
             ctx.abort(
@@ -115,7 +115,7 @@ class HarnessServicer(pb_grpc.HarnessServicer):
 
     def RenameSession(self, req, ctx) -> pb.RenameSessionReply:
         try:
-            r = asyncio_run(self.h.rename_session(req.session_id, req.name))
+            r = asyncio_run(self.h.rename_session(req.session_id, req.name, req.root))
         except ValueError as e:
             msg = str(e)
             ctx.abort(
@@ -138,6 +138,7 @@ class HarnessServicer(pb_grpc.HarnessServicer):
                 turn=st["run"]["turn"],
                 last_error=st["run"]["last_error"]),
             session_id=st["session_id"],
+            root=st.get("root", ""),
             history_messages=st["history_messages"],
             prompt_tokens_last=st["prompt_tokens_last"],
             queue_depth=st["queue_depth"],
