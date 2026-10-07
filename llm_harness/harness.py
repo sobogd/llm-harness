@@ -127,11 +127,13 @@ class Harness:
         self._seen_roots = list(dict.fromkeys(self._seen_roots))
         # ---- phase 6: JSONL persistence + restore
         self.store = SessionStore(self.root)
+        self._persisted = False
         self._apply_loaded(self.store.load())
 
     def _apply_loaded(self, data: dict | None) -> None:
         """Adopt a replayed session (startup restore or LoadSession)."""
         self._loaded = data
+        self._persisted = data is not None
         if not data or not data["history"]:
             return
         self.history = list(data["history"])
@@ -168,16 +170,9 @@ class Harness:
                                       state=self.state,
                                       root=self.root)
         else:
-            self.store.record({"type": "meta",
-                               "session_id": self.session_id,
-                               "mtplx_session_id": self.client.session_id,
-                               "model": self.settings.model,
-                               "created": int(time.time() * 1000),
-                               "settings": self.settings.to_dict()})
+            # no session on disk yet: keep it that way, the header is
+            # written on first use (_persist_session)
             await self._sweep_orphans()
-            # the system prompt lives in history but is never appended by
-            # ask() — persist it explicitly or replay would lose it
-            self.store.record_message(self.history[0])
 
     async def _sweep_orphans(self) -> None:
         """Clear mtplx RAM for sessions this workspace ran before but no
@@ -220,9 +215,25 @@ class Harness:
         self.state = st
 
     # ------------------------------------------------------------------ Ask
+    def _persist_session(self) -> None:
+        """Write the session header (meta + system prompt) on first use.
+        Until then the session exists only in RAM — invisible to
+        list_sessions, nothing on disk."""
+        if self._persisted:
+            return
+        self.store.record({"type": "meta",
+                           "session_id": self.session_id,
+                           "mtplx_session_id": self.client.session_id,
+                           "model": self.settings.model,
+                           "created": int(time.time() * 1000),
+                           "settings": self.settings.to_dict()})
+        self.store.record_message(self.history[0])
+        self._persisted = True
+
     async def ask(self, prompt: str, system_note: str = "") -> dict:
         if not prompt.strip():
             raise ValueError("prompt is empty")
+        self._persist_session()
         if self.state == "running":
             self.queue.append(prompt)
             await self.events.publish("queued", run_id=self.run_id,
@@ -336,7 +347,8 @@ class Harness:
         cand.validate()          # raises -> nothing is applied
         self.settings = cand
         self.client.s = cand
-        self.store.record({"type": "settings", "settings": cand.to_dict()})
+        if self._persisted:
+            self.store.record({"type": "settings", "settings": cand.to_dict()})
         await self.events.publish("settings_changed", settings=cand.to_dict())
         return cand
 
@@ -351,7 +363,8 @@ class Harness:
                 keep_last_messages=keep, reason="manual")
             if info.get("ok"):
                 self.history = new_history
-                self.store.record_history(new_history)
+                if self._persisted:
+                    self.store.record_history(new_history)
             await self.events.publish("compact_done", **info)
             return info
 
@@ -425,7 +438,7 @@ class Harness:
             return meta.get("session_id") == session_id
         return False
 
-    def _fresh_session(self) -> dict:
+    def _fresh_session(self, persist: bool = True) -> dict:
         self.session_id = str(uuid.uuid4())
         self.client.new_session_id()
         self.system_prompt = build_system_prompt(self.root)
@@ -438,19 +451,18 @@ class Harness:
         self.last_usage = {}
         self._loaded = None
         self.store.reset()
-        self.store.record({"type": "meta", "session_id": self.session_id,
-                           "mtplx_session_id": self.client.session_id,
-                           "model": self.settings.model,
-                           "created": int(time.time() * 1000),
-                           "settings": self.settings.to_dict()})
-        self.store.record_message(self.history[0])
+        self._persisted = False
+        if persist:
+            self._persist_session()
         return {"session_id": self.session_id}
 
     async def _archive_current(self) -> None:
-        """Keep the current session in the archive (nothing to archive when
-        only the system prompt is in history)."""
-        if len(self.history) <= 1:
+        """Keep the current session in the archive. Sessions without real
+        conversation (never persisted, no user messages) leave no archive."""
+        if not self._persisted:
             return
+        if not any(m.get("role") == "user" for m in self.history):
+            return      # no real conversation — leave no empty archive
         await self.store.flush()
         self.store.archive(self.session_id)
         # the archived session leaves the stage: drop its RAM KV now (SSD
@@ -588,10 +600,10 @@ class Harness:
             except Exception:
                 pass
             await self.store.flush()
-            r = self._fresh_session()
-            await self.store.flush()
+            r = self._fresh_session(persist=False)
             await self.events.publish("session_reset",
-                                      session_id=self.session_id, messages=1,
+                                      session_id=self.session_id,
+                                      messages=len(self.history),
                                       root=self.root)
             return {"ok": True, "deleted": session_id, **r}
         store = self.store if target == self.root else SessionStore(target, create=False)

@@ -104,6 +104,7 @@ class SessionStore:
         await self._idle.wait()
 
     def reset(self) -> None:
+        self._pending.clear()
         try:
             self.path.write_text("", encoding="utf-8")
         except OSError:
