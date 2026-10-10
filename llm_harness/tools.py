@@ -13,6 +13,14 @@ MAX_BYTES = 50_000
 BASH_DEFAULT_TIMEOUT = 120
 BASH_MAX_TIMEOUT = 600
 
+
+def _as_int(value: object, default: int) -> int:
+    """int() with fallback: models sometimes send junk for integer args."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
 TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
@@ -232,8 +240,8 @@ def tool_read(root: str, args: dict) -> str:
         return f"error: {e}"
     lines = raw.replace("\r\n", "\n").split("\n")
     total = len(lines)
-    offset = max(int(args.get("offset") or 1), 1)
-    limit = int(args.get("limit") or MAX_LINES)
+    offset = max(_as_int(args.get("offset"), 1), 1)
+    limit = _as_int(args.get("limit"), MAX_LINES)
     limit = min(max(limit, 1), MAX_LINES)
     window = lines[offset - 1: offset - 1 + limit]
     body = "\n".join(f"{i:4d}| {line}" for i, line in
@@ -300,7 +308,8 @@ def tool_edit(root: str, args: dict) -> str:
 # -- bash ---------------------------------------------------------------------
 async def tool_bash(root: str, args: dict) -> str:
     command = args.get("command", "")
-    timeout = min(int(args.get("timeout") or BASH_DEFAULT_TIMEOUT), BASH_MAX_TIMEOUT)
+    timeout = min(_as_int(args.get("timeout"), BASH_DEFAULT_TIMEOUT),
+                  BASH_MAX_TIMEOUT)
     try:
         env = dict(os.environ)
         env["PATH"] = effective_path()

@@ -96,7 +96,11 @@ def _format(results: list[dict]) -> str:
 
 def search(query: str, count: int = 8) -> str:
     query = (query or "").strip()
-    count = min(max(int(count or 8), 1), MAX_COUNT)
+    try:
+        count = int(count or 8)
+    except (TypeError, ValueError):
+        count = 8
+    count = min(max(count, 1), MAX_COUNT)
     if not query:
         return "error: query is empty"
     env = load_env()
@@ -115,4 +119,4 @@ def search(query: str, count: int = 8) -> str:
 
 
 def tool_web_search(root: str, args: dict) -> str:
-    return search(args.get("query", ""), int(args.get("count") or 8))
+    return search(args.get("query", ""), args.get("count") or 8)

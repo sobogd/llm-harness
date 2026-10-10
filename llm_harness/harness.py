@@ -240,6 +240,16 @@ class Harness:
                                       queue_depth=len(self.queue))
             return {"run_id": self.run_id, "session_id": self.session_id,
                     "state": "queued"}
+        # stop() flips state to "stopped" before the old run task has
+        # finished waiting it out; never spawn a second _run on the same
+        # session (same belt and braces as in resume())
+        if self.state == "stopped":
+            task = self._task
+            if task is not None and not task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=10)
+                except BaseException:  # noqa: BLE001
+                    pass
         if system_note:
             m = {"role": "user", "content": system_note}
             self.history.append(m)
@@ -756,7 +766,6 @@ class Harness:
                                                  run_id=self.run_id)
                         continue
                     break
-                    await self.events.publish("run_resumed", run_id=self.run_id)
                     continue
                 break
         except Exception as e:  # noqa: BLE001 — last-resort guard for the run task
