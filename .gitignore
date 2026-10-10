@@ -5,10 +5,7 @@ __pycache__/
 .DS_Store
 logs/
 .llm-harness/
-app/build/
-app/.dart_tool/
-app/.flutter/
-app/.packages
+app/
 app/android/app/keystore.properties
 *.jks
 *.p12
